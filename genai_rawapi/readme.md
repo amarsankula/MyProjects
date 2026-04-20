@@ -13,4 +13,6 @@ uvicorn main:app --reload
 
 ### Docker 
 docker build -t genai-chat-api .
+
+
 docker run -p 8000:8000 --env-file .env genai-chat-api
