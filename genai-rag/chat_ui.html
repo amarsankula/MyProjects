@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RAG Chat</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .container { width: 780px; height: 92vh; background: white; border-radius: 16px; border: 1px solid #e5e5e5; display: flex; flex-direction: column; overflow: hidden; }
+    .header { padding: 14px 20px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; justify-content: space-between; }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; }
+    .header h1 { font-size: 15px; font-weight: 600; color: #111; }
+    .upload-bar { padding: 10px 20px; border-bottom: 1px solid #e5e5e5; display: flex; align-items: center; gap: 10px; background: #fafafa; }
+    .upload-bar label { font-size: 13px; color: #555; }
+    .upload-bar input[type=file] { font-size: 12px; flex: 1; }
+    .upload-btn { font-size: 12px; padding: 6px 14px; background: #6d28d9; color: white; border: none; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+    .upload-btn:hover { background: #5b21b6; }
+    .upload-btn:disabled { background: #d1d5db; cursor: not-allowed; }
+    .upload-status { font-size: 12px; color: #6b7280; }
+    .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+    .message { display: flex; gap: 10px; align-items: flex-start; }
+    .message.user { flex-direction: row-reverse; }
+    .avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+    .avatar.ai { background: #ede9fe; color: #7c3aed; }
+    .avatar.user { background: #dbeafe; color: #1d4ed8; }
+    .bubble { max-width: 75%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.6; color: #111; }
+    .message.ai .bubble { background: #f9f9f9; border: 1px solid #e5e5e5; border-top-left-radius: 4px; }
+    .message.user .bubble { background: #6d28d9; color: white; border-top-right-radius: 4px; }
+    .sources { margin-top: 8px; font-size: 11px; color: #9ca3af; border-top: 1px solid #e5e5e5; padding-top: 6px; }
+    .sources summary { cursor: pointer; color: #7c3aed; font-weight: 500; }
+    .source-item { margin-top: 4px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; font-family: monospace; line-height: 1.4; }
+    .typing .bubble { color: #999; font-style: italic; }
+    .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #bbb; gap: 8px; }
+    .empty-state .icon { font-size: 36px; }
+    .empty-state p { font-size: 14px; }
+    .input-area { padding: 14px 20px; border-top: 1px solid #e5e5e5; display: flex; gap: 10px; align-items: flex-end; }
+    textarea { flex: 1; border: 1px solid #e5e5e5; border-radius: 10px; padding: 10px 14px; font-size: 14px; font-family: inherit; resize: none; outline: none; line-height: 1.5; max-height: 120px; }
+    textarea:focus { border-color: #7c3aed; }
+    button#send-btn { width: 40px; height: 40px; border-radius: 10px; background: #6d28d9; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    button#send-btn:hover { background: #5b21b6; }
+    button#send-btn:disabled { background: #d1d5db; cursor: not-allowed; }
+    button#send-btn svg { width: 18px; height: 18px; fill: white; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="header-left">
+      <div class="dot"></div>
+      <h1>RAG Chat — Ask Your Documents</h1>
+    </div>
+  </div>
+
+  <div class="upload-bar">
+    <label>Upload PDF:</label>
+    <input type="file" id="file-input" accept=".pdf">
+    <button class="upload-btn" id="upload-btn" onclick="uploadFile()">Upload & Ingest</button>
+    <span class="upload-status" id="upload-status"></span>
+  </div>
+
+  <div class="messages" id="messages">
+    <div class="empty-state" id="empty-state">
+      <div class="icon">📄</div>
+      <p>Upload a PDF above, then ask questions about it</p>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <textarea id="input" placeholder="Ask a question about your document... (Enter to send)" rows="1"></textarea>
+    <button id="send-btn" onclick="sendMessage()">
+      <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
+    </button>
+  </div>
+</div>
+
+<script>
+  const API = "http://localhost:8000";
+  const input = document.getElementById("input");
+  const messagesEl = document.getElementById("messages");
+
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 120) + "px";
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  async function uploadFile() {
+    const fileInput = document.getElementById("file-input");
+    const status = document.getElementById("upload-status");
+    const btn = document.getElementById("upload-btn");
+
+    if (!fileInput.files[0]) { status.textContent = "Please select a PDF first"; return; }
+
+    btn.disabled = true;
+    status.textContent = "Uploading & ingesting...";
+
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+
+    try {
+      const res = await fetch(`${API}/upload`, { method: "POST", body: formData });
+      const data = await res.json();
+      if (res.ok) {
+        status.style.color = "#22c55e";
+        status.textContent = `✓ ${data.filename} — ${data.chunks_stored} chunks ready`;
+        const empty = document.getElementById("empty-state");
+        if (empty) empty.remove();
+        addMessage("ai", `Document uploaded! I've indexed "${data.filename}" into ${data.chunks_stored} chunks. Ask me anything about it.`);
+      } else {
+        status.style.color = "#ef4444";
+        status.textContent = "Upload failed: " + (data.detail || "unknown error");
+      }
+    } catch (err) {
+      status.style.color = "#ef4444";
+      status.textContent = "Cannot reach server. Is FastAPI running?";
+    }
+    btn.disabled = false;
+  }
+
+  function addMessage(role, text, sources = []) {
+    const msg = document.createElement("div");
+    msg.className = "message " + role;
+    const avatar = document.createElement("div");
+    avatar.className = "avatar " + role;
+    avatar.textContent = role === "user" ? "AK" : "AI";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = text;
+
+    if (sources.length > 0) {
+      const details = document.createElement("details");
+      details.className = "sources";
+      const summary = document.createElement("summary");
+      summary.textContent = `${sources.length} source chunks used`;
+      details.appendChild(summary);
+      sources.forEach((s, i) => {
+        const div = document.createElement("div");
+        div.className = "source-item";
+        div.textContent = `[${i+1}] ${s}...`;
+        details.appendChild(div);
+      });
+      bubble.appendChild(details);
+    }
+
+    msg.appendChild(avatar);
+    msg.appendChild(bubble);
+    messagesEl.appendChild(msg);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function addTyping() {
+    const msg = document.createElement("div");
+    msg.className = "message ai typing"; msg.id = "typing";
+    const avatar = document.createElement("div");
+    avatar.className = "avatar ai"; avatar.textContent = "AI";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble"; bubble.textContent = "Thinking...";
+    msg.appendChild(avatar); msg.appendChild(bubble);
+    messagesEl.appendChild(msg);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  async function sendMessage() {
+    const text = input.value.trim();
+    if (!text) return;
+    const sendBtn = document.getElementById("send-btn");
+
+    addMessage("user", text);
+    input.value = ""; input.style.height = "auto";
+    sendBtn.disabled = true;
+    addTyping();
+
+    try {
+      const res = await fetch(`${API}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: text, k: 3 })
+      });
+      const data = await res.json();
+      document.getElementById("typing")?.remove();
+      if (res.ok) {
+        addMessage("ai", data.answer, data.sources);
+      } else {
+        addMessage("ai", "Error: " + (data.detail || "Something went wrong"));
+      }
+    } catch (err) {
+      document.getElementById("typing")?.remove();
+      addMessage("ai", "Cannot reach server. Is FastAPI running?");
+    }
+    sendBtn.disabled = false;
+    input.focus();
+  }
+</script>
+</body>
+</html>
